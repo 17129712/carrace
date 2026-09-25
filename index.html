@@ -91,8 +91,19 @@
     backdrop-filter:blur(4px);color:#fff;font-size:12px;letter-spacing:.14em;font-weight:500;
     transition:background .08s,transform .08s,border-color .08s}
   .tbtn.hit{background:rgba(255,180,90,.42);border-color:#fff;transform:scale(.94)}
-  #tL{left:max(16px,env(safe-area-inset-left));width:88px;height:88px}
-  #tR{left:calc(max(16px,env(safe-area-inset-left)) + 100px);width:88px;height:88px}
+  /* analog stick (360°) — steering follows the horizontal deflection */
+  #stick{position:absolute;pointer-events:auto;touch-action:none;
+    left:max(10px,env(safe-area-inset-left));bottom:max(10px,env(safe-area-inset-bottom));width:170px;height:170px}
+  #stick .ring{position:absolute;inset:14px;border-radius:50%;
+    border:1.5px solid rgba(255,255,255,.5);background:rgba(12,9,8,.28);backdrop-filter:blur(4px)}
+  #stick .ring::before,#stick .ring::after{content:"";position:absolute;background:rgba(255,255,255,.18)}
+  #stick .ring::before{left:50%;top:14%;bottom:14%;width:1px}
+  #stick .ring::after{top:50%;left:14%;right:14%;height:1px}
+  #stick .knob{position:absolute;left:50%;top:50%;width:66px;height:66px;margin:-33px 0 0 -33px;border-radius:50%;
+    background:radial-gradient(circle at 40% 35%,rgba(255,255,255,.55),rgba(255,255,255,.18) 70%);
+    border:1.5px solid rgba(255,255,255,.75);box-shadow:0 4px 14px rgba(0,0,0,.35);
+    transition:transform .12s ease-out}
+  #stick.hit .knob{transition:none;background:radial-gradient(circle at 40% 35%,rgba(255,220,170,.8),rgba(255,180,90,.42) 70%)}
   #tGas{right:max(16px,env(safe-area-inset-right));width:104px;height:104px;
     border-color:rgba(255,200,140,.7)}
   #tBrk{right:calc(max(16px,env(safe-area-inset-right)) + 116px);width:88px;height:88px}
@@ -179,8 +190,7 @@
 <div id="announce"><div class="msg" id="msg"></div></div>
 
 <div id="touch">
-  <button class="tbtn" id="tL" aria-label="left"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg></button>
-  <button class="tbtn" id="tR" aria-label="right"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></button>
+  <div id="stick" aria-label="steering stick"><div class="ring"></div><div class="knob"></div></div>
   <button class="tbtn" id="tHnd">DRIFT</button>
   <button class="tbtn" id="tBrk">BRAKE</button>
   <button class="tbtn" id="tGas">GAS</button>
@@ -949,7 +959,7 @@ function emit(x, y, z, spread, up) {
 /* ============================================================
    10. INPUT
 ============================================================ */
-const input = { steer: 0, gas: 0, brake: 0, hand: false, kL: false, kR: false, kU: false, kD: false };
+const input = { steer: 0, gas: 0, brake: 0, hand: false, kL: false, kR: false, kU: false, kD: false, stickX: 0 };
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) e.preventDefault();
@@ -979,11 +989,40 @@ function bindTouch(el, on, off) {
   el.addEventListener('mousedown', dn);
   addEventListener('mouseup', up);
 }
+/* 360° analog stick: tracks its own touch id so GAS/BRAKE can be held at the same time */
+function bindStick(el) {
+  const knob = el.querySelector('.knob');
+  const R = 52, DEAD = 0.1;
+  let id = null;
+  const move = t => {
+    const r = el.getBoundingClientRect();
+    let dx = t.clientX - (r.left + r.width / 2), dy = t.clientY - (r.top + r.height / 2);
+    const d = Math.hypot(dx, dy);
+    if (d > R) { dx *= R / d; dy *= R / d; }
+    knob.style.transform = `translate(${dx}px,${dy}px)`;
+    const x = dx / R;
+    input.stickX = Math.abs(x) < DEAD ? 0 : Math.sign(x) * (Math.abs(x) - DEAD) / (1 - DEAD);
+  };
+  const find = e => { for (const t of e.changedTouches) if (t.identifier === id) return t; return null; };
+  el.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (id !== null) return;
+    const t = e.changedTouches[0]; id = t.identifier;
+    el.classList.add('hit'); move(t);
+  }, { passive: false });
+  el.addEventListener('touchmove', e => { e.preventDefault(); const t = find(e); if (t) move(t); }, { passive: false });
+  const end = e => {
+    if (!find(e)) return;
+    e.preventDefault(); id = null; input.stickX = 0;
+    el.classList.remove('hit'); knob.style.transform = '';
+  };
+  el.addEventListener('touchend', end, { passive: false });
+  el.addEventListener('touchcancel', end, { passive: false });
+}
 if (IS_TOUCH) {
   document.getElementById('touch').classList.add('on');
   document.body.classList.add('touchui');
-  bindTouch(document.getElementById('tL'), () => input.kL = true, () => input.kL = false);
-  bindTouch(document.getElementById('tR'), () => input.kR = true, () => input.kR = false);
+  bindStick(document.getElementById('stick'));
   bindTouch(document.getElementById('tGas'), () => input.kU = true, () => input.kU = false);
   bindTouch(document.getElementById('tBrk'), () => input.kD = true, () => input.kD = false);
   bindTouch(document.getElementById('tHnd'), () => input.hand = true, () => input.hand = false);
@@ -1072,7 +1111,8 @@ let shake = 0, hitFlash = 0;
 
 function stepPlayer(dt) {
   const racing = state.phase === 'race';
-  input.steer = THREE.MathUtils.lerp(input.steer, (input.kL ? -1 : 0) + (input.kR ? 1 : 0), 1 - Math.pow(0.0008, dt));
+  const steerIn = THREE.MathUtils.clamp((input.kL ? -1 : 0) + (input.kR ? 1 : 0) + input.stickX, -1, 1);
+  input.steer = THREE.MathUtils.lerp(input.steer, steerIn, 1 - Math.pow(0.0008, dt));
   input.gas = racing && input.kU ? 1 : 0;
   input.brake = racing && input.kD ? 1 : 0;
 
