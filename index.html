@@ -135,6 +135,10 @@
   #rotate{position:fixed;inset:0;z-index:40;display:none;place-items:center;background:#0d0b0a;text-align:center;padding:30px}
   #rotate p{font-size:14px;letter-spacing:.16em;line-height:2;color:rgba(255,255,255,.75)}
   #rotate svg{width:64px;height:64px;stroke:var(--amber);fill:none;stroke-width:1.6;margin-bottom:18px}
+  /* touch layout: bottom corners belong to the buttons, so map/speedo move to the top corners */
+  body.touchui #mapwrap{bottom:auto;top:calc(max(14px,env(safe-area-inset-top)) + 58px)}
+  body.touchui #maptag{display:none}
+  body.touchui #speedo{bottom:auto;top:max(4px,env(safe-area-inset-top))}
   @media (orientation:portrait) and (max-width:900px){ #rotate{display:grid} }
   #loader{position:fixed;inset:0;z-index:60;display:grid;place-items:center;background:var(--ink);gap:16px;text-align:center}
   #loader .bar{width:min(320px,70vw);height:2px;background:rgba(255,255,255,.15);overflow:hidden;margin-top:16px}
@@ -977,6 +981,7 @@ function bindTouch(el, on, off) {
 }
 if (IS_TOUCH) {
   document.getElementById('touch').classList.add('on');
+  document.body.classList.add('touchui');
   bindTouch(document.getElementById('tL'), () => input.kL = true, () => input.kL = false);
   bindTouch(document.getElementById('tR'), () => input.kR = true, () => input.kR = false);
   bindTouch(document.getElementById('tGas'), () => input.kU = true, () => input.kU = false);
@@ -1206,7 +1211,11 @@ function stepAI(a, dt) {
   // v = sqrt(a_lat * R),  R ≈ 4*SEG / k
   const vCorner = Math.sqrt(12.4 * (4 * SEG) / k);
   const target = Math.min(CAR.topSpeed, vCorner) * a.def.skill * (state.phase === 'race' ? 1 : 0);
-  a.speed += (target - a.speed) * (target > a.speed ? 0.55 : 1.5) * dt;
+  // same power curve / brake limits as the player, so rivals can't rocket off the grid
+  const frac = Math.min(a.speed / CAR.topSpeed, 1);
+  const maxAcc = CAR.power * (1 - 0.55 * Math.pow(frac, 2.1)) * a.def.skill;
+  const dv = (target - a.speed) * (target > a.speed ? 0.55 : 1.5);
+  a.speed += THREE.MathUtils.clamp(dv, -CAR.brake, maxAcc) * dt;
   a.speed = Math.max(a.speed, 0);
 
   // racing line: drift toward the inside of the corner + a little wander
